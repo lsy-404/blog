@@ -1,0 +1,40 @@
+{
+  "name": "blog",
+  "version": "1.4.0",
+  "description": "Personal bilingual blog",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "docs:prepare": "node scripts/prepare-content.mjs",
+    "docs:translate": "node scripts/translation-writeback.mjs --live",
+    "docs:build": "node scripts/prepare-content.mjs --strict && vuepress build .prepared --dest docs/.vuepress/dist",
+    "docs:clean-dev": "node scripts/prepare-content.mjs && vuepress dev .prepared --clean-cache",
+    "docs:dev": "node scripts/prepare-content.mjs && vuepress dev .prepared",
+    "docs:prod": "live-server docs/.vuepress/dist",
+    "upgrade": "pnpm dlx vp-update"
+  },
+  "devDependencies": {
+    "@vuepress/bundler-vite": "2.0.0-rc.31",
+    "@vuepress/helper": "2.0.0-rc.135",
+    "@vuepress/plugin-blog": "2.0.0-rc.137",
+    "@vuepress/plugin-register-components": "2.0.0-rc.135",
+    "@vuepress/plugin-slimsearch": "2.0.0-rc.137",
+    "image-size": "^2.0.4",
+    "sass": "^1.107.0",
+    "vue": "^3.5.44",
+    "vuepress": "2.0.0-rc.31",
+    "vuepress-theme-hope": "2.0.0-rc.110"
+  },
+  "dependencies": {
+    "@fortawesome/fontawesome-svg-core": "^7",
+    "@fortawesome/free-solid-svg-icons": "^7",
+    "@vuepress/plugin-feed": "2.0.0-rc.137",
+    "@waline/client": "3.16.1",
+    "gray-matter": "4.0.3",
+    "markdown-it": "^15.0.3"
+  }
+}
