@@ -1,0 +1,237 @@
+name: Publish blog
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+concurrency:
+  group: blog-history-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  normalize-non-main:
+    name: Normalize non-main branch history
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out event commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+
+      - name: Normalize branch with event lease
+        run: node scripts/normalize-history.mjs --push --expected-remote "$GITHUB_SHA"
+
+  publish-main:
+    name: Translate, validate, normalize, and deploy main
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    outputs:
+      normalized_sha: ${{ steps.normalize.outputs.normalized_sha }}
+    steps:
+      - name: Check out event commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+
+      - name: Activate pnpm 9
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.9 --activate
+          pnpm --version
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create translation cache directory
+        run: mkdir -p translations
+
+      - name: Restore translation cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: translations
+          key: blog-translations-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            blog-translations-v1-${{ runner.os }}-
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Translate changed documents and write back
+        id: writeback
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.sha }}
+          CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+          CF_AIG_GATEWAY_ID: ${{ vars.CF_AIG_GATEWAY_ID }}
+          CF_AIG_TOKEN: ${{ secrets.CF_AIG_TOKEN }}
+        run: |
+          if [[ -n "$EVENT_BEFORE" && ! "$EVENT_BEFORE" =~ ^0+$ ]]; then
+            if [[ ! "$EVENT_BEFORE" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+              echo "Invalid event before SHA" >&2
+              exit 1
+            fi
+            git fetch --no-tags origin "$EVENT_BEFORE"
+          fi
+          args=(--after "$EVENT_AFTER" --live)
+          if [[ -n "$EVENT_BEFORE" && ! "$EVENT_BEFORE" =~ ^0+$ ]]; then
+            args+=(--before "$EVENT_BEFORE")
+          fi
+          node scripts/translation-writeback.mjs "${args[@]}"
+
+      - name: Save translation cache
+        if: always()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: translations
+          key: blog-translations-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Build static site after translation writeback
+        run: pnpm run docs:build
+
+      - name: Verify built site
+        run: python3 test/verify-publish.py
+
+      - name: Stage only translation outputs
+        env:
+          CHANGED_PATHS_JSON: ${{ steps.writeback.outputs.changed_paths_json }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process'
+
+          const paths = JSON.parse(process.env.CHANGED_PATHS_JSON || '[]')
+          if (!Array.isArray(paths) || paths.some((path) => typeof path !== 'string')) {
+            throw new Error('translation changed_paths_json must be an array of paths')
+          }
+
+          const approved = new Set()
+          for (const file of paths) {
+            const parts = file.split('/')
+            const allowedFile = file === 'docs/.vuepress/translation-state.json'
+              || (file.startsWith('docs/') && !file.startsWith('docs/.vuepress/') && file.endsWith('.md'))
+            if (!allowedFile || file.includes('\\') || file.includes('\n') || file.includes('\r')
+              || parts.some((part) => !part || part === '.' || part === '..')) {
+              throw new Error(`unexpected translation output path: ${JSON.stringify(file)}`)
+            }
+            approved.add(file)
+          }
+
+          if (paths.length) execFileSync('git', ['add', '--', ...paths], { stdio: 'inherit' })
+
+          const list = (args) => execFileSync('git', args).toString('utf8').split('\0').filter(Boolean)
+          const unstaged = list(['diff', '--name-only', '-z'])
+          const untracked = list(['ls-files', '--others', '--exclude-standard', '-z'])
+          const staged = list(['diff', '--cached', '--name-only', '-z'])
+          for (const file of [...unstaged, ...untracked, ...staged]) {
+            if (!approved.has(file)) throw new Error(`unapproved repository change: ${JSON.stringify(file)}`)
+          }
+          NODE
+
+      - name: Create temporary bot commit
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_AUTHOR_DATE: '@0 +0000'
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_DATE: '@0 +0000'
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git -c commit.gpgsign=false commit --allow-empty -m 'Update blog'
+          test "$(git rev-parse HEAD^)" = "$GITHUB_SHA"
+
+      - name: Normalize and push verified tree
+        id: normalize
+        run: node scripts/normalize-history.mjs --push --expected-remote "$GITHUB_SHA"
+
+      - name: Confirm main still points at the verified commit
+        env:
+          NORMALIZED_SHA: ${{ steps.normalize.outputs.normalized_sha }}
+        run: |
+          remote_sha="$(git ls-remote --heads origin "$GITHUB_REF" | cut -f1)"
+          if [[ "$remote_sha" != "$NORMALIZED_SHA" ]]; then
+            echo "main advanced after verification; refusing to publish stale output" >&2
+            exit 1
+          fi
+
+      - name: Upload site artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: blog-site-${{ github.run_id }}
+          path: docs/.vuepress/dist
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: true
+
+      - name: Upload translation cache artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: blog-translations-${{ github.run_id }}
+          path: translations/**/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Confirm main still points at the verified commit before deployment
+        env:
+          NORMALIZED_SHA: ${{ steps.normalize.outputs.normalized_sha }}
+        run: |
+          remote_sha="$(git ls-remote --heads origin "$GITHUB_REF" | cut -f1)"
+          if [[ "$remote_sha" != "$NORMALIZED_SHA" ]]; then
+            echo "main advanced before deployment; refusing to publish stale output" >&2
+            exit 1
+          fi
+
+      - name: Deploy Cloudflare Pages
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0
+        with:
+          apiToken: ${{ secrets.CF_PAGES_TOKEN }}
+          accountId: ${{ vars.CF_ACCOUNT_ID }}
+          wranglerVersion: '4.142.0'
+          command: >-
+            pages deploy docs/.vuepress/dist --project-name=myblog --branch=main
+            --commit-hash=${{ steps.normalize.outputs.normalized_sha }}
+            --commit-message="Update blog" --commit-dirty=false
+
+  normalize-main-after-failure:
+    name: Normalize original main commit after publish failure
+    if: always() && github.ref == 'refs/heads/main' && needs.publish-main.result == 'failure' && needs.publish-main.outputs.normalized_sha == ''
+    needs: publish-main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out original event commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+
+      - name: Normalize original source tree without publishing
+        run: node scripts/normalize-history.mjs --push --expected-remote "$GITHUB_SHA"

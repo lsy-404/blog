@@ -1,0 +1,15 @@
+
+/ignore/
+/agents/
+/program/
+/docs/.vuepress/.temp
+/docs/.vuepress/dist/
+/docs/.vuepress/.cache/
+/test/output/
+/.prepared/
+/translations/
+/docs/.vuepress/.translated/
+/node_modules/
+/.env
+/.env.*
+!/.env.example
