@@ -1,0 +1,40 @@
+{
+  "name": "blog",
+  "version": "1.4.0",
+  "description": "Personal bilingual blog",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "docs:prepare": "node scripts/prepare-content.mjs",
+    "docs:translate": "node scripts/translation-writeback.mjs --live",
+    "docs:build": "node scripts/prepare-content.mjs --strict && vuepress build .prepared --dest docs/.vuepress/dist",
+    "docs:clean-dev": "node scripts/prepare-content.mjs && vuepress dev .prepared --clean-cache",
+    "docs:dev": "node scripts/prepare-content.mjs && vuepress dev .prepared",
+    "docs:prod": "live-server docs/.vuepress/dist",
+    "upgrade": "pnpm dlx vp-update"
+  },
+  "devDependencies": {
+    "@vuepress/bundler-vite": "2.0.0-rc.19",
+    "@vuepress/plugin-comment": "2.0.0-rc.74",
+    "@vuepress/plugin-register-components": "2.0.0-rc.66",
+    "@vuepress/plugin-search": "2.0.0-rc.74",
+    "@vuepress/plugin-slimsearch": "2.0.0-rc.74",
+    "vue": "^3.5.13",
+    "vuepress": "2.0.0-rc.19",
+    "vuepress-theme-hope": "2.0.0-rc.71"
+  },
+  "dependencies": {
+    "@vuepress/plugin-comment": "2.0.0-rc.74",
+    "@vuepress/plugin-feed": "2.0.0-rc.74",
+    "@vuepress/plugin-pwa": "2.0.0-rc.74",
+    "@waline/client": "3.3.0",
+    "gray-matter": "4.0.3",
+    "markdown-it": "^14.1.0",
+    "vue-scriptx": "^0.2.7",
+    "vuepress-plugin-alert": "0.0.5"
+  }
+}

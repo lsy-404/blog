@@ -1,0 +1,11 @@
+{
+    "name": "Siyu Lei's Blog",
+    "short_name": "Siyu Lei's Blog",
+    "start_url": "/",
+    "display": "standalone",
+    "id": "leisiyu.dev",
+    "background_color": "#fff",
+    "theme_color": "#0a209d",
+    "description": "Siyu Lei's Blog",
+    "update": "force"
+  }
